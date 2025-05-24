@@ -1,6 +1,6 @@
 // Some of the items can be modified to match the user's preference
 APP_DISPLAY_NAME = Trio
-APP_ICON = trioBlack
+APP_ICON = catWithPod
 APP_URL_SCHEME = Trio
 
 // DEVELOPER_TEAM will be set to your Apple Developer ID - typically using ConfigOverride.xcconfig
@@ -9,7 +9,8 @@ DEVELOPER_TEAM = ##TEAM_ID##
 // Typically this is not modified unless you want to create a separate (unique) app using your ID
 // It must include $(DEVELOPMENT_TEAM)
 // For example: myOwnApp.$(DEVELOPMENT_TEAM).trio
-BUNDLE_IDENTIFIER = org.nightscout.$(DEVELOPMENT_TEAM).trio
+// BUNDLE_IDENTIFIER = org.nightscout.$(DEVELOPMENT_TEAM).trio
+BUNDLE_IDENTIFIER = myOwnApp.$(DEVELOPMENT_TEAM).trio
 
 // Danger zone - do not modify these unless you know what you are doing
 
