@@ -72,11 +72,12 @@ final class BaseTDDStorage: TDDStorage, Injectable {
         let pumpSuspendEvents = groupedEvents[.pumpSuspend] ?? []
         let pumpResumeEvents = groupedEvents[.pumpResume] ?? []
 
+        let now = Date()
         // gaps no event covers ran the pump's schedule; inferred in memory, never persisted
         let inferredSegments = ScheduledBasalInference.segments(
             events: Self.timelineEvents(from: pumpHistory),
             profile: basalProfile,
-            now: Date()
+            now: now
         )
 
         // Create pairs of suspend + resume events
@@ -90,10 +91,12 @@ final class BaseTDDStorage: TDDStorage, Injectable {
         async let scheduledBasalInsulin = calculateScheduledBasalInsulin(
             scheduledBasalEvents,
             inferredSegments: inferredSegments,
+            now: now,
             roundToSupportedBasalRate: pumpManager.roundToSupportedBasalRate
         )
         async let tempBasalInsulin = calculateTempBasalInsulin(
             tempBasalEvents, suspendResumePairs: suspendResumePairs,
+            now: now,
             roundToSupportedBasalRate: pumpManager.roundToSupportedBasalRate
         )
         async let weightedAverage = calculateWeightedAverage()
@@ -219,9 +222,10 @@ final class BaseTDDStorage: TDDStorage, Injectable {
     ///   - suspendResumePairs: Array of suspend and resume event pairs
     ///   - roundToSupportedBasalRate: Closure to round rates to pump-supported values
     /// - Returns: Total insulin delivered via temporary basal rates in units
-    private func calculateTempBasalInsulin(
+    func calculateTempBasalInsulin(
         _ tempBasalEvents: [PumpHistoryEvent],
         suspendResumePairs: [(suspend: PumpHistoryEvent, resume: PumpHistoryEvent)],
+        now: Date,
         roundToSupportedBasalRate: @escaping (_ unitsPerHour: Double) -> Double
     ) -> Decimal {
         guard !tempBasalEvents.isEmpty else { return 0 }
@@ -257,12 +261,11 @@ final class BaseTDDStorage: TDDStorage, Injectable {
 
         // Calculate insulin delivery while accounting for suspensions and premature interruptions
         var totalInsulin: Decimal = 0
-        let currentDate = Date()
         var lastEndTime: Date?
 
         for (index, event) in timeline.enumerated() {
             if event.type == .tempBasal {
-                let effectiveEnd = min(event.end, currentDate) // Adjust for ongoing temp basals
+                let effectiveEnd = min(event.end, now) // Adjust for ongoing temp basals
                 var actualStart = event.start
                 var actualEnd = effectiveEnd
 
@@ -303,14 +306,18 @@ final class BaseTDDStorage: TDDStorage, Injectable {
     }
 
     /// Sums pump-reported scheduled-basal rows plus in-memory inferred gap segments.
-    private func calculateScheduledBasalInsulin(
+    func calculateScheduledBasalInsulin(
         _ scheduledBasalEvents: [PumpHistoryEvent],
         inferredSegments: [ScheduledBasalInference.Segment],
+        now: Date,
         roundToSupportedBasalRate: @escaping (_ unitsPerHour: Double) -> Double
     ) -> Decimal {
         let reported = scheduledBasalEvents.reduce(into: Decimal(0)) { totalInsulin, event in
             guard let rate = event.amount, let duration = event.duration, duration > 0 else { return }
-            let durationHours = Decimal(duration) / 60
+            // clamp rows that extend into the future to what actually delivered
+            let end = min(event.timestamp.addingTimeInterval(TimeInterval(duration) * 60), now)
+            guard end > event.timestamp else { return }
+            let durationHours = Decimal(end.timeIntervalSince(event.timestamp) / 3600)
             let insulin = Decimal(roundToSupportedBasalRate(Double(truncating: (rate * durationHours) as NSNumber)))
             if insulin > 0 { totalInsulin += insulin }
         }

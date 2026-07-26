@@ -86,7 +86,13 @@ enum ScheduledBasalInference {
 
         while day < end {
             for minutes in profile.map(\.minutes) {
-                let boundary = day.addingTimeInterval(TimeInterval(minutes * 60))
+                // wall-clock boundary; adding seconds to startOfDay drifts on DST days
+                guard let boundary = calendar.date(
+                    bySettingHour: minutes / 60,
+                    minute: minutes % 60,
+                    second: 0,
+                    of: day
+                ) else { continue }
                 if boundary > start, boundary < end {
                     rateChanges.append(TimelineEvent(start: boundary, kind: .profileRateChange))
                 }

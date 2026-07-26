@@ -322,6 +322,19 @@ final class BasePumpHistoryStorage: PumpHistoryStorage, Injectable {
                         isScheduledBasal: event.tempBasal?.isScheduledBasal ?? false,
                         deliveredUnits: event.tempBasal?.deliveredUnits as Decimal?
                     )
+                // TDD and scheduled-basal inference need suspension spans
+                case PumpEventStored.EventType.pumpSuspend.rawValue:
+                    return PumpHistoryEvent(
+                        id: event.id ?? UUID().uuidString,
+                        type: .pumpSuspend,
+                        timestamp: event.timestamp ?? Date()
+                    )
+                case PumpEventStored.EventType.pumpResume.rawValue:
+                    return PumpHistoryEvent(
+                        id: event.id ?? UUID().uuidString,
+                        type: .pumpResume,
+                        timestamp: event.timestamp ?? Date()
+                    )
                 default:
                     return nil
                 }

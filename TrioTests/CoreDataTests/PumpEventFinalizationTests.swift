@@ -439,6 +439,46 @@ import Testing
         #expect(row?.peakTime == nil, "External doses don't snapshot the pump insulin model")
     }
 
+    @Test("Suspends and resumes flow into pump history for TDD") func testSuspendResumeInPumpHistory() async throws {
+        let date = Date().addingTimeInterval(-30.minutes.timeInterval)
+        let suspend = LoopKit.NewPumpEvent(date: date, dose: nil, raw: Data("suspend-1".utf8), title: "Suspend", type: .suspend)
+        let resume = LoopKit.NewPumpEvent(
+            date: date.addingTimeInterval(10.minutes.timeInterval),
+            dose: nil,
+            raw: Data("resume-1".utf8),
+            title: "Resume",
+            type: .resume
+        )
+        try await storage.storePumpEvents([suspend, resume], replacePendingEvents: false)
+
+        let history = try await storage.getPumpHistory()
+        #expect(history.contains { $0.type == .pumpSuspend }, "Suspends feed the inference timeline")
+        #expect(history.contains { $0.type == .pumpResume }, "Resumes feed the inference timeline")
+    }
+
+    @Test("Future-extending scheduled basal rows clamp to now in TDD") func testScheduledBasalClampsToNow() throws {
+        let tddStorage = resolver.resolve(TDDStorage.self) as! BaseTDDStorage
+        let now = Date()
+        let event = PumpHistoryEvent(
+            id: "sbr",
+            type: .tempBasal,
+            timestamp: now.addingTimeInterval(-30.minutes.timeInterval),
+            amount: 2.0,
+            duration: 60,
+            isScheduledBasal: true
+        )
+
+        let insulin = tddStorage.calculateScheduledBasalInsulin(
+            [event],
+            inferredSegments: [],
+            now: now,
+            roundToSupportedBasalRate: { $0 }
+        )
+
+        // 2 U/hr for the 30 elapsed minutes, not the scheduled 60
+        #expect(abs(Double(truncating: insulin as NSNumber) - 1.0) < 0.001)
+    }
+
     // MARK: - NS upload race (values changed while a POST was in flight)
 
     private func nsTreatment(insulin: Decimal?, rate: Decimal?, duration: Int?, eventType: PumpEvent) -> NightscoutTreatment {

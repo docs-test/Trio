@@ -65,6 +65,8 @@ final class BaseDeviceDataManager: DeviceDataManager, Injectable {
     @Injected() private var trioAlertManager: TrioAlertManager!
     // lazy to avoid circular dependency (NightscoutManager → PumpHistoryStorage)
     private var resolver: Resolver?
+    // serializes event batches: a PM may report again before the prior store finished
+    private var pumpEventsTask: Task<Void, Never>?
 
     @Persisted(key: "BaseDeviceDataManager.lastEventDate") var lastEventDate: Date? = nil
     @SyncAccess(lock: accessLock) @Persisted(key: "BaseDeviceDataManager.lastHeartBeatTime") var lastHeartBeatTime: Date =
@@ -588,7 +590,8 @@ extension BaseDeviceDataManager: PumpManagerDelegate {
     ) {
         dispatchPrecondition(condition: .onQueue(processQueue))
 
-        Task {
+        pumpEventsTask = Task { [previousBatch = pumpEventsTask] in
+            await previousBatch?.value
             do {
                 // filter buggy TBRs > maxBasal from MDT
                 let events = events.filter {
@@ -605,12 +608,16 @@ extension BaseDeviceDataManager: PumpManagerDelegate {
                 completion(nil)
                 // the pump withdrew these events; remove their NS treatments
                 if !purgedUploadedIds.isEmpty, let nightscoutManager = resolver?.resolve(NightscoutManager.self) {
-                    for id in purgedUploadedIds {
-                        await nightscoutManager.deleteInsulin(withID: id)
+                    // detached: remote cleanup must not delay the next event batch
+                    Task {
+                        for id in purgedUploadedIds {
+                            await nightscoutManager.deleteInsulin(withID: id)
+                        }
                     }
                 }
             } catch {
                 debug(.deviceManager, "\(DebuggingIdentifiers.failed) Failed to store pump events: \(error)")
+                completion(error)
             }
         }
     }
