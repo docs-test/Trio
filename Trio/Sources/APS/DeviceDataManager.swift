@@ -32,6 +32,7 @@ protocol DeviceDataManager: GlucoseSource {
 
     func heartbeat(date: Date)
     func updatePumpBLEHeartbeat(lastCGMReadingDate: Date?, expectedCGMReadingInterval: TimeInterval?)
+    func updateCGMHeartbeatCapability(providesBLEHeartbeat: Bool)
     func createBolusProgressReporter() -> DoseProgressReporter?
     var alertHistoryStorage: AlertHistoryStorage! { get }
 }
@@ -247,6 +248,7 @@ final class BaseDeviceDataManager: DeviceDataManager, Injectable {
     @PersistedProperty(key: "PumpManagerState") var rawPumpManager: PumpManager.RawValue?
 
     @SyncAccess private var lastPumpHeartbeatRequest: PumpHeartbeatRequest?
+    @SyncAccess private var cgmProvidesBLEHeartbeat = false
     private var appActiveCancellable: AnyCancellable?
 
     var bluetoothManager: BluetoothStateManager { bluetoothProvider }
@@ -290,7 +292,21 @@ final class BaseDeviceDataManager: DeviceDataManager, Injectable {
         pumpManager?.createBolusProgressReporter(reportingOn: processQueue)
     }
 
+    func updateCGMHeartbeatCapability(providesBLEHeartbeat: Bool) {
+        cgmProvidesBLEHeartbeat = providesBLEHeartbeat
+        // A CGM with its own heartbeat relieves the pump; retract any standing request
+        if providesBLEHeartbeat {
+            lastPumpHeartbeatRequest = nil
+            pumpManager?.setBLEHeartbeatRequest(nil)
+        }
+    }
+
     func updatePumpBLEHeartbeat(lastCGMReadingDate: Date?, expectedCGMReadingInterval: TimeInterval?) {
+        guard !cgmProvidesBLEHeartbeat else {
+            lastPumpHeartbeatRequest = nil
+            pumpManager?.setBLEHeartbeatRequest(nil)
+            return
+        }
         // Tell the pump when the next CGM reading is due so it can align its BLE heartbeat (LoopKit#599)
         let request = PumpHeartbeatRequest(
             lastCGMReadingDate: lastCGMReadingDate,
@@ -500,7 +516,7 @@ extension BaseDeviceDataManager: PumpManagerDelegate {
     }
 
     func pumpManagerMustProvideBLEHeartbeat(_: PumpManager) -> Bool {
-        true
+        !cgmProvidesBLEHeartbeat
     }
 
     func pumpManager(_ pumpManager: PumpManager, didUpdate status: PumpManagerStatus, oldStatus: PumpManagerStatus) {
