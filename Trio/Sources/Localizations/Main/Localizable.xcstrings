@@ -28474,6 +28474,7 @@
       }
     },
     "Acknowledge all alerts" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -111042,6 +111043,9 @@
         }
       }
     },
+    "Dynamic (Default):" : {
+
+    },
     "Dynamic Insulin Sensitivity" : {
       "localizations" : {
         "bg" : {
@@ -112168,6 +112172,7 @@
       }
     },
     "Dynamic:" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
@@ -222382,6 +222387,9 @@
         }
       }
     },
+    "Purple = Above Range" : {
+
+    },
     "Quantity Carbs" : {
       "localizations" : {
         "bg" : {
@@ -314391,6 +314399,7 @@
       }
     },
     "Yellow = Above Range" : {
+      "extractionState" : "stale",
       "localizations" : {
         "bg" : {
           "stringUnit" : {
