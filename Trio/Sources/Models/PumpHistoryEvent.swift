@@ -18,6 +18,7 @@ struct PumpHistoryEvent: JSON, Equatable, Identifiable {
     let isExternalInsulin: Bool?
     let isScheduledBasal: Bool?
     let deliveredUnits: Decimal?
+    let programmedAmount: Decimal?
     let insulinType: String?
 
     init(
@@ -38,6 +39,7 @@ struct PumpHistoryEvent: JSON, Equatable, Identifiable {
         isExternalInsulin: Bool? = nil,
         isScheduledBasal: Bool? = nil,
         deliveredUnits: Decimal? = nil,
+        programmedAmount: Decimal? = nil,
         insulinType: String? = nil
     ) {
         self.id = id
@@ -57,6 +59,7 @@ struct PumpHistoryEvent: JSON, Equatable, Identifiable {
         self.isExternalInsulin = isExternalInsulin
         self.isScheduledBasal = isScheduledBasal
         self.deliveredUnits = deliveredUnits
+        self.programmedAmount = programmedAmount
         self.insulinType = insulinType
     }
 }
@@ -110,6 +113,7 @@ extension PumpHistoryEvent {
         case isExternalInsulin
         case isScheduledBasal
         case deliveredUnits
+        case programmedAmount
         case insulinType
     }
 }

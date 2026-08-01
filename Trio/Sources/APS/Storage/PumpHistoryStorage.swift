@@ -597,6 +597,7 @@ final class BasePumpHistoryStorage: PumpHistoryStorage, Injectable {
                         amount: event.bolus?.amount as Decimal?,
                         isSMB: event.bolus?.isSMB ?? true,
                         isExternal: event.bolus?.isExternal ?? false,
+                        programmedAmount: event.bolus?.programmedAmount as Decimal?,
                         insulinType: event.insulinType
                     )
                 case PumpEvent.tempBasal.rawValue:

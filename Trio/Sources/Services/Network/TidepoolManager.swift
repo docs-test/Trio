@@ -381,13 +381,15 @@ extension BaseTidepoolManager {
                             )
                     case .bolus:
                         guard let amount = event.amount else { return result }
+                        // an interrupted bolus programmed more than it delivered
+                        let programmed = event.programmedAmount ?? amount
                         let bolusDoseEntry = DoseEntry(
                             type: .bolus,
                             startDate: event.timestamp,
                             endDate: event.timestamp,
-                            value: Double(amount),
+                            value: Double(programmed),
                             unit: .units,
-                            deliveredUnits: nil,
+                            deliveredUnits: Double(amount),
                             syncIdentifier: event.id,
                             scheduledBasalRate: nil,
                             insulinType: self.insulinType(for: event),
