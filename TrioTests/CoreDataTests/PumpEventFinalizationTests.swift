@@ -230,6 +230,17 @@ import Testing
         #expect(row?.peakTime as? Decimal == 75, "Default rapid-acting peak is 75 min")
     }
 
+    /// `IobCalculation` can't import LoopKit (the algorithm package compiles it
+    /// without it), so its default peaks are literals. Pin them to the presets
+    /// they mirror; this fails if LoopKit ever changes them.
+    @Test("Default peaks match LoopKit's exponential presets") func testDefaultPeaksMatchLoopKit() throws {
+        let rapidActing = IobCalculation.lookupPeak(curve: .rapidActing, useCustomPeakTime: false, insulinPeakTime: 0)
+        let ultraRapid = IobCalculation.lookupPeak(curve: .ultraRapid, useCustomPeakTime: false, insulinPeakTime: 0)
+
+        #expect(rapidActing == ExponentialInsulinModelPreset.rapidActingAdult.peakActivity / 60)
+        #expect(ultraRapid == ExponentialInsulinModelPreset.fiasp.peakActivity / 60)
+    }
+
     @Test("Finalized rows are frozen against later reports") func testFinalizedRowIsFrozen() async throws {
         let date = Date().addingTimeInterval(-10.minutes.timeInterval)
 
