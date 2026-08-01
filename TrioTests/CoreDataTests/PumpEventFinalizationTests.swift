@@ -479,6 +479,114 @@ import Testing
         #expect(abs(Double(truncating: insulin as NSNumber) - 1.0) < 0.001)
     }
 
+    // MARK: - Suspension pairing
+
+    private func suspendEvent(_ date: Date) -> PumpHistoryEvent {
+        PumpHistoryEvent(id: UUID().uuidString, type: .pumpSuspend, timestamp: date)
+    }
+
+    private func resumeEvent(_ date: Date) -> PumpHistoryEvent {
+        PumpHistoryEvent(id: UUID().uuidString, type: .pumpResume, timestamp: date)
+    }
+
+    @Test("An unresumed suspension still pairs the earlier one") func testUnbalancedSuspensionPairing() throws {
+        // pump history arrives newest-first: S1 R1 S2, still suspended
+        let now = Date()
+        let s1 = now.addingTimeInterval(-3.hours.timeInterval)
+        let r1 = now.addingTimeInterval(-2.hours.timeInterval)
+        let s2 = now.addingTimeInterval(-1.hours.timeInterval)
+
+        let spans = BaseTDDStorage.suspensionSpans(
+            suspends: [suspendEvent(s2), suspendEvent(s1)],
+            resumes: [resumeEvent(r1)],
+            now: now
+        )
+
+        #expect(spans.count == 2, "Both the closed and the open suspension must be represented")
+        #expect(spans.first?.start == s1 && spans.first?.end == r1, "S1 must pair with R1, not be dropped")
+        #expect(spans.last?.start == s2 && spans.last?.end == now, "An unresumed suspension runs to now")
+    }
+
+    @Test("Balanced suspensions pair chronologically") func testBalancedSuspensionPairing() throws {
+        let now = Date()
+        let s1 = now.addingTimeInterval(-4.hours.timeInterval)
+        let r1 = now.addingTimeInterval(-3.hours.timeInterval)
+        let s2 = now.addingTimeInterval(-2.hours.timeInterval)
+        let r2 = now.addingTimeInterval(-1.hours.timeInterval)
+
+        let spans = BaseTDDStorage.suspensionSpans(
+            suspends: [suspendEvent(s2), suspendEvent(s1)],
+            resumes: [resumeEvent(r2), resumeEvent(r1)],
+            now: now
+        )
+
+        #expect(spans.count == 2)
+        #expect(spans.first?.end == r1 && spans.last?.end == r2, "Each suspend pairs with the resume that ends it")
+    }
+
+    @Test("A leading resume without its suspend is ignored") func testLeadingResumeIgnored() throws {
+        let now = Date()
+        let r0 = now.addingTimeInterval(-3.hours.timeInterval)
+        let s1 = now.addingTimeInterval(-2.hours.timeInterval)
+        let r1 = now.addingTimeInterval(-1.hours.timeInterval)
+
+        let spans = BaseTDDStorage.suspensionSpans(
+            suspends: [suspendEvent(s1)],
+            resumes: [resumeEvent(r1), resumeEvent(r0)],
+            now: now
+        )
+
+        #expect(spans.count == 1)
+        #expect(spans.first?.start == s1 && spans.first?.end == r1)
+    }
+
+    @Test("A suspension inside a running temp basal is not counted as delivered") func testSuspensionReducesTempBasalInsulin(
+    ) throws {
+        let tddStorage = resolver.resolve(TDDStorage.self) as! BaseTDDStorage
+        let now = Date()
+        let start = now.addingTimeInterval(-4.hours.timeInterval)
+        // 1 U/hr for 4 h, suspended for the middle hour
+        let tempBasal = PumpHistoryEvent(id: "tbr", type: .tempBasal, timestamp: start, amount: 1.0, duration: 240)
+        let spans = BaseTDDStorage.suspensionSpans(
+            suspends: [suspendEvent(start.addingTimeInterval(1.hours.timeInterval))],
+            resumes: [resumeEvent(start.addingTimeInterval(2.hours.timeInterval))],
+            now: now
+        )
+
+        let insulin = tddStorage.calculateTempBasalInsulin(
+            [tempBasal],
+            suspensions: spans,
+            now: now,
+            roundToSupportedBasalRate: { $0 }
+        )
+
+        #expect(abs(Double(truncating: insulin as NSNumber) - 3.0) < 0.001, "Only the three unsuspended hours deliver")
+    }
+
+    @Test("A running temp basal is clamped to now and to its successor") func testTempBasalClampedToNowAndSuccessor() throws {
+        let tddStorage = resolver.resolve(TDDStorage.self) as! BaseTDDStorage
+        let now = Date()
+        let first = now.addingTimeInterval(-2.hours.timeInterval)
+        // 2 U/hr scheduled for 2 h but replaced after 1 h, then 1 U/hr still running with 1 h elapsed
+        let superseded = PumpHistoryEvent(id: "tbr1", type: .tempBasal, timestamp: first, amount: 2.0, duration: 120)
+        let running = PumpHistoryEvent(
+            id: "tbr2",
+            type: .tempBasal,
+            timestamp: now.addingTimeInterval(-1.hours.timeInterval),
+            amount: 1.0,
+            duration: 120
+        )
+
+        let insulin = tddStorage.calculateTempBasalInsulin(
+            [superseded, running],
+            suspensions: [],
+            now: now,
+            roundToSupportedBasalRate: { $0 }
+        )
+
+        #expect(abs(Double(truncating: insulin as NSNumber) - 3.0) < 0.001, "2 U for the first hour, 1 U so far for the second")
+    }
+
     // MARK: - NS upload race (values changed while a POST was in flight)
 
     private func nsTreatment(insulin: Decimal?, rate: Decimal?, duration: Int?, eventType: PumpEvent) -> NightscoutTreatment {

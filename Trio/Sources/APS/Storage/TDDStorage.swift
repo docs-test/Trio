@@ -80,10 +80,11 @@ final class BaseTDDStorage: TDDStorage, Injectable {
             now: now
         )
 
-        // Create pairs of suspend + resume events
-        let suspendResumePairs = zip(pumpSuspendEvents, pumpResumeEvents).filter { suspend, resume in
-            resume.timestamp > suspend.timestamp
-        }
+        let suspensions = Self.suspensionSpans(
+            suspends: pumpSuspendEvents,
+            resumes: pumpResumeEvents,
+            now: now
+        )
 
         // Calculate all components concurrently
         async let pumpDataHours = calculatePumpDataHours(pumpHistory)
@@ -95,7 +96,7 @@ final class BaseTDDStorage: TDDStorage, Injectable {
             roundToSupportedBasalRate: pumpManager.roundToSupportedBasalRate
         )
         async let tempBasalInsulin = calculateTempBasalInsulin(
-            tempBasalEvents, suspendResumePairs: suspendResumePairs,
+            tempBasalEvents, suspensions: suspensions,
             now: now,
             roundToSupportedBasalRate: pumpManager.roundToSupportedBasalRate
         )
@@ -216,15 +217,46 @@ final class BaseTDDStorage: TDDStorage, Injectable {
             }
     }
 
+    /// Pairs each suspend with the resume that ends it, chronologically. Counts are
+    /// routinely unbalanced — the pump may still be suspended, or the window may open
+    /// mid-suspension — so positional pairing silently drops real spans.
+    /// - Returns: suspension spans, an open suspension ending at `now`
+    static func suspensionSpans(
+        suspends: [PumpHistoryEvent],
+        resumes: [PumpHistoryEvent],
+        now: Date
+    ) -> [(start: Date, end: Date)] {
+        let suspendTimes = suspends.map(\.timestamp).sorted()
+        let resumeTimes = resumes.map(\.timestamp).sorted()
+
+        var spans: [(start: Date, end: Date)] = []
+        var nextResume = resumeTimes.startIndex
+
+        for suspend in suspendTimes {
+            // spans never nest: skip resumes that belong to an earlier suspension
+            while nextResume < resumeTimes.endIndex, resumeTimes[nextResume] <= suspend {
+                nextResume += 1
+            }
+            guard nextResume < resumeTimes.endIndex else {
+                // no resume follows: the pump is still suspended
+                if suspend < now { spans.append((start: suspend, end: now)) }
+                break
+            }
+            spans.append((start: suspend, end: resumeTimes[nextResume]))
+            nextResume += 1
+        }
+        return spans
+    }
+
     /// Calculates temporary basal insulin delivery for a given time period, accounting for interruptions and suspensions
     /// - Parameters:
     ///   - tempBasalEvents: Array of temporary basal events
-    ///   - suspendResumePairs: Array of suspend and resume event pairs
+    ///   - suspensions: Suspension spans from `suspensionSpans(suspends:resumes:now:)`
     ///   - roundToSupportedBasalRate: Closure to round rates to pump-supported values
     /// - Returns: Total insulin delivered via temporary basal rates in units
     func calculateTempBasalInsulin(
         _ tempBasalEvents: [PumpHistoryEvent],
-        suspendResumePairs: [(suspend: PumpHistoryEvent, resume: PumpHistoryEvent)],
+        suspensions: [(start: Date, end: Date)],
         now: Date,
         roundToSupportedBasalRate: @escaping (_ unitsPerHour: Double) -> Double
     ) -> Decimal {
@@ -236,70 +268,38 @@ final class BaseTDDStorage: TDDStorage, Injectable {
         let inferredEvents = tempBasalEvents.filter { $0.deliveredUnits == nil }
         guard !inferredEvents.isEmpty else { return reportedInsulin }
 
-        // Merge temp basal events and suspend-resume pairs into a single timeline
-        var timeline = [(start: Date, end: Date, type: EventType, rate: Decimal?)]()
-
-        // Add temp basal events to the timeline
+        var timeline = [(start: Date, end: Date, rate: Decimal)]()
         for event in inferredEvents {
             guard let duration = event.duration, let rate = event.amount else { continue }
             let end = event.timestamp.addingTimeInterval(TimeInterval(duration * 60))
-            timeline.append((start: event.timestamp, end: end, type: .tempBasal, rate: rate))
+            timeline.append((start: event.timestamp, end: end, rate: rate))
         }
-
-        // Add suspend-resume events to the timeline
-        for suspendResume in suspendResumePairs {
-            timeline.append((
-                start: suspendResume.suspend.timestamp,
-                end: suspendResume.resume.timestamp,
-                type: .pumpSuspend,
-                rate: nil
-            ))
-        }
-
-        // Sort the timeline by start time
         timeline.sort { $0.start < $1.start }
 
-        // Calculate insulin delivery while accounting for suspensions and premature interruptions
         var totalInsulin: Decimal = 0
-        var lastEndTime: Date?
 
         for (index, event) in timeline.enumerated() {
-            if event.type == .tempBasal {
-                let effectiveEnd = min(event.end, now) // Adjust for ongoing temp basals
-                var actualStart = event.start
-                var actualEnd = effectiveEnd
-
-                // Check for interruption by the next event
-                if index < timeline.count - 1 {
-                    let nextEvent = timeline[index + 1]
-                    if nextEvent.start < actualEnd, nextEvent.type != .pumpSuspend {
-                        actualEnd = nextEvent.start
-                    }
-                }
-
-                // Adjust for overlapping suspensions
-                if let lastSuspendEnd = lastEndTime, lastSuspendEnd > actualStart {
-                    actualStart = lastSuspendEnd
-                }
-
-                // Calculate insulin if the duration is valid
-                let durationMinutes = max(0, actualEnd.timeIntervalSince(actualStart) / 60)
-                if durationMinutes > 0, let rate = event.rate {
-                    let durationHours = (Decimal(durationMinutes) / 60).truncated(toPlaces: 5)
-                    let insulin = Decimal(roundToSupportedBasalRate(Double(rate * durationHours)))
-                    if insulin > 0 {
-                        totalInsulin += insulin
-
-//                        debug(
-//                            .apsManager,
-//                            "Temp basal: \(rate) U/hr for \(durationHours) hr (Start: \(actualStart.ISO8601Format()), End: \(actualEnd.ISO8601Format())) = \(insulin) U"
-//                        )
-                    }
-                }
-            } else if event.type == .pumpSuspend {
-                // Update the last suspend end time to adjust future temp basal durations
-                lastEndTime = event.end
+            let start = event.start
+            // clamp to now for running temps, and to the temp that superseded this one
+            var end = min(event.end, now)
+            if index < timeline.count - 1 {
+                end = min(end, timeline[index + 1].start)
             }
+            guard end > start else { continue }
+
+            // a suspension anywhere inside the window delivers nothing
+            let suspendedSeconds = suspensions.reduce(0.0) { total, suspension in
+                let overlapStart = max(start, suspension.start)
+                let overlapEnd = min(end, suspension.end)
+                return total + max(0, overlapEnd.timeIntervalSince(overlapStart))
+            }
+
+            let deliveredMinutes = max(0, (end.timeIntervalSince(start) - suspendedSeconds) / 60)
+            guard deliveredMinutes > 0 else { continue }
+
+            let durationHours = (Decimal(deliveredMinutes) / 60).truncated(toPlaces: 5)
+            let insulin = Decimal(roundToSupportedBasalRate(Double(event.rate * durationHours)))
+            if insulin > 0 { totalInsulin += insulin }
         }
 
         return reportedInsulin + totalInsulin
