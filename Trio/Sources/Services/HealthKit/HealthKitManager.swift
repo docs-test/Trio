@@ -525,6 +525,17 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
         return nil
     }
 
+    /// Insulin type recorded with the dose; the pump's current type is only a
+    /// fallback for rows stored before it was persisted per event. External
+    /// doses are not the pump's insulin, so they get no fallback.
+    private func insulinTypeTitle(_ storedIdentifier: String?, isExternal: Bool = false) -> String {
+        if let storedIdentifier, let insulinType = InsulinType(identifier: storedIdentifier) {
+            return insulinType.title
+        }
+        guard !isExternal else { return "" }
+        return deviceDataManager?.pumpManager?.status.insulinType?.title ?? ""
+    }
+
     // Helper function to create a HealthKit sample from a PumpHistoryEvent
     private func createSample(
         for event: PumpHistoryEvent,
@@ -558,7 +569,7 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
                 HKMetadataKeySyncIdentifier: event.id,
                 HKMetadataKeySyncVersion: 1,
                 HKMetadataKeyInsulinDeliveryReason: deliveryReason.rawValue,
-                AppleHealthConfig.TrioInsulinType: deviceDataManager?.pumpManager?.status.insulinType?.title ?? ""
+                AppleHealthConfig.TrioInsulinType: insulinTypeTitle(event.insulinType, isExternal: event.isExternal ?? false)
             ]
         )
 
@@ -606,7 +617,7 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
                     HKMetadataKeySyncIdentifier: predecessorEntryId,
                     HKMetadataKeySyncVersion: 2, // set the version # to 2, as we update an entry. initial version is 1.
                     HKMetadataKeyInsulinDeliveryReason: HKInsulinDeliveryReason.basal.rawValue,
-                    AppleHealthConfig.TrioInsulinType: deviceDataManager?.pumpManager?.status.insulinType?.title ?? ""
+                    AppleHealthConfig.TrioInsulinType: insulinTypeTitle(predecessorEntry.insulinType)
                 ]
             )
 

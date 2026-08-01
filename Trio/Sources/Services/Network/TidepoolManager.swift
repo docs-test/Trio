@@ -390,7 +390,7 @@ extension BaseTidepoolManager {
                             deliveredUnits: nil,
                             syncIdentifier: event.id,
                             scheduledBasalRate: nil,
-                            insulinType: self.apsManager.pumpManager?.status.insulinType ?? nil,
+                            insulinType: self.insulinType(for: event),
                             automatic: event.isSMB ?? true,
                             manuallyEntered: event.isExternal ?? false
                         )
@@ -517,6 +517,21 @@ extension BaseTidepoolManager {
 
 /// Insulin Helper Functions
 extension BaseTidepoolManager {
+    /// Insulin type recorded with the dose; the pump's current type is only a
+    /// fallback for rows stored before it was persisted per event.
+    private func insulinType(for storedIdentifier: String?) -> InsulinType? {
+        if let storedIdentifier, let insulinType = InsulinType(identifier: storedIdentifier) {
+            return insulinType
+        }
+        return apsManager.pumpManager?.status.insulinType
+    }
+
+    private func insulinType(for event: PumpHistoryEvent) -> InsulinType? {
+        // external doses are not the pump's insulin, so don't fall back to its type
+        guard event.isExternal != true else { return nil }
+        return insulinType(for: event.insulinType)
+    }
+
     private func processTempBasalEvent(
         _ event: PumpHistoryEvent,
         existingTempBasalEntries: [PumpEventStored]
@@ -562,7 +577,7 @@ extension BaseTidepoolManager {
                             unit: .units,
                             deliveredUnits: adjustedDeliveredUnits,
                             syncIdentifier: predecessorEntrySyncIdentifier,
-                            insulinType: apsManager.pumpManager?.status.insulinType ?? nil,
+                            insulinType: insulinType(for: predecessorEntry.insulinType),
                             automatic: true,
                             manuallyEntered: false,
                             isMutable: false
@@ -587,7 +602,7 @@ extension BaseTidepoolManager {
                     unit: .internationalUnitsPerHour,
                     doubleValue: Double(currentBasalRate.rate)
                 ),
-                insulinType: apsManager.pumpManager?.status.insulinType ?? nil,
+                insulinType: insulinType(for: event),
                 automatic: true,
                 manuallyEntered: false,
                 isMutable: false
