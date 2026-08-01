@@ -241,6 +241,51 @@ import Testing
         #expect(ultraRapid == ExponentialInsulinModelPreset.fiasp.peakActivity / 60)
     }
 
+    // MARK: - Remote payloads
+
+    @Test("Health and Tidepool payloads carry the dose's own insulin data") func testUploadPayloadsCarryDoseData() async throws {
+        let date = Date().addingTimeInterval(-30.minutes.timeInterval)
+        try await storage.storePumpEvents(
+            [
+                bolusEvent(date: date, units: 5.0, deliveredUnits: 2.4, syncIdentifier: "bolus-payload", isMutable: false),
+                tempBasalEvent(
+                    start: date,
+                    end: date.addingTimeInterval(30.minutes.timeInterval),
+                    rate: 1.0,
+                    deliveredUnits: 0.35,
+                    syncIdentifier: "tbr-payload",
+                    isMutable: false
+                )
+            ],
+            replacePendingEvents: false
+        )
+
+        let health = try await storage.getPumpHistoryNotYetUploadedToHealth()
+        let tidepool = try await storage.getPumpHistoryNotYetUploadedToTidepool()
+
+        for payload in [health, tidepool] {
+            let bolus = payload.first { $0.type == .bolus }
+            let tempBasal = payload.first { $0.type == .tempBasal }
+            #expect(bolus?.insulinType == LoopKit.InsulinType.lyumjev.identifier, "Dose insulin type must reach the uploader")
+            #expect(tempBasal?.deliveredUnits == 0.35, "Pump-reported delivery must reach the uploader")
+        }
+        // programmed vs delivered is a Tidepool-only distinction today;
+        // Double->Decimal rounding leaves binary noise, so compare with tolerance
+        let tidepoolBolus = tidepool.first { $0.type == .bolus }
+        #expect(abs((tidepoolBolus?.amount ?? 0) - 2.4) < 0.0001, "Delivered units")
+        #expect(abs((tidepoolBolus?.programmedAmount ?? 0) - 5.0) < 0.0001, "Programmed units")
+    }
+
+    @Test("External doses expose no insulin type to uploaders") func testExternalDoseHasNoInsulinType() async throws {
+        await storage.storeExternalInsulinEvent(amount: 2.0, timestamp: Date().addingTimeInterval(-10.minutes.timeInterval))
+
+        let tidepool = try await storage.getPumpHistoryNotYetUploadedToTidepool()
+        let health = try await storage.getPumpHistoryNotYetUploadedToHealth()
+        #expect(tidepool.first?.insulinType == nil, "External insulin is not the pump's insulin")
+        #expect(tidepool.first?.isExternal == true)
+        #expect(health.first?.isExternal == true, "Health needs this to suppress the pump-type fallback")
+    }
+
     @Test("Finalized rows are frozen against later reports") func testFinalizedRowIsFrozen() async throws {
         let date = Date().addingTimeInterval(-10.minutes.timeInterval)
 
