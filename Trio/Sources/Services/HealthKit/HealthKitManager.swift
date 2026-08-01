@@ -447,7 +447,8 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
                         // For temp basal events, process them and adjust overlapping durations if necessary
                         guard let duration = event.duration, let amount = event.amount else { continue }
 
-                        let value = (Decimal(duration) / 60.0) * amount
+                        // pump-reported delivery wins; rate x duration is the fallback
+                        let value = event.deliveredUnits ?? (Decimal(duration) / 60.0) * amount
                         let valueRounded = self.deviceDataManager?.pumpManager?
                             .roundToSupportedBolusVolume(units: Double(value)) ?? Double(value)
 
@@ -599,9 +600,11 @@ final class BaseHealthKitManager: HealthKitManager, Injectable {
             // Precise duration in hours
             let adjustedDurationHours = adjustedDuration / 3600
 
-            // Calculate the insulin rate and adjusted delivered units
+            // Calculate the insulin rate and adjusted delivered units;
+            // a finalized row already reports what the truncated span delivered
             let predecessorEntryRate = predecessorEntry.tempBasal?.rate?.doubleValue ?? 0
-            let adjustedDeliveredUnits = adjustedDurationHours * predecessorEntryRate
+            let adjustedDeliveredUnits = predecessorEntry.tempBasal?.deliveredUnits?.doubleValue
+                ?? adjustedDurationHours * predecessorEntryRate
             let adjustedDeliveredUnitsRounded = deviceDataManager?.pumpManager?
                 .roundToSupportedBolusVolume(units: adjustedDeliveredUnits) ?? adjustedDeliveredUnits
 

@@ -557,6 +557,7 @@ final class BasePumpHistoryStorage: PumpHistoryStorage, Injectable {
                             timestamp: timestamp,
                             amount: tempBasalRate as Decimal,
                             duration: Int(tempBasal.duration),
+                            deliveredUnits: tempBasal.deliveredUnits as Decimal?,
                             insulinType: event.insulinType
                         )
                     } else {
@@ -608,6 +609,7 @@ final class BasePumpHistoryStorage: PumpHistoryStorage, Injectable {
                             timestamp: timestamp,
                             amount: tempBasalRate as Decimal,
                             duration: Int(tempBasal.duration),
+                            deliveredUnits: tempBasal.deliveredUnits as Decimal?,
                             insulinType: event.insulinType
                         )
                     } else {

@@ -544,7 +544,8 @@ extension BaseTidepoolManager {
         else {
             return insulinDoseEvents
         }
-        let value = (Decimal(duration) / 60.0) * amount
+        // pump-reported delivery wins; rate x duration is the fallback
+        let value = event.deliveredUnits ?? (Decimal(duration) / 60.0) * amount
 
         // Find the corresponding temp basal entry in existingTempBasalEntries
         if let matchingEntryIndex = existingTempBasalEntries.firstIndex(where: { $0.timestamp == event.timestamp }) {
@@ -565,8 +566,10 @@ extension BaseTidepoolManager {
                     if predecessorEndDate > event.timestamp {
                         let adjustedEndDate = event.timestamp
                         let adjustedDuration = adjustedEndDate.timeIntervalSince(predecessorTimestamp)
-                        let adjustedDeliveredUnits = (adjustedDuration / 3600) *
-                            Double(truncating: predecessorEntry.tempBasal?.rate ?? 0)
+                        // a finalized row already reports what the truncated span delivered
+                        let adjustedDeliveredUnits = predecessorEntry.tempBasal?.deliveredUnits
+                            .map { Double(truncating: $0) }
+                            ?? (adjustedDuration / 3600) * Double(truncating: predecessorEntry.tempBasal?.rate ?? 0)
 
                         // Create updated predecessor dose entry
                         let updatedPredecessorEntry = DoseEntry(
