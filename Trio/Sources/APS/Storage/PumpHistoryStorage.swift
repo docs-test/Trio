@@ -543,7 +543,9 @@ final class BasePumpHistoryStorage: PumpHistoryStorage, Injectable {
                         id: event.id ?? UUID().uuidString,
                         type: .bolus,
                         timestamp: event.timestamp ?? Date(),
-                        amount: event.bolus?.amount as Decimal?
+                        amount: event.bolus?.amount as Decimal?,
+                        isExternal: event.bolus?.isExternal ?? false,
+                        insulinType: event.insulinType
                     )
                 case PumpEvent.tempBasal.rawValue:
                     if let id = event.id, let timestamp = event.timestamp, let tempBasal = event.tempBasal,
@@ -554,7 +556,9 @@ final class BasePumpHistoryStorage: PumpHistoryStorage, Injectable {
                             type: .tempBasal,
                             timestamp: timestamp,
                             amount: tempBasalRate as Decimal,
-                            duration: Int(tempBasal.duration)
+                            duration: Int(tempBasal.duration),
+                            deliveredUnits: tempBasal.deliveredUnits as Decimal?,
+                            insulinType: event.insulinType
                         )
                     } else {
                         return nil
@@ -592,7 +596,9 @@ final class BasePumpHistoryStorage: PumpHistoryStorage, Injectable {
                         timestamp: event.timestamp ?? Date(),
                         amount: event.bolus?.amount as Decimal?,
                         isSMB: event.bolus?.isSMB ?? true,
-                        isExternal: event.bolus?.isExternal ?? false
+                        isExternal: event.bolus?.isExternal ?? false,
+                        programmedAmount: event.bolus?.programmedAmount as Decimal?,
+                        insulinType: event.insulinType
                     )
                 case PumpEvent.tempBasal.rawValue:
                     if let id = event.id, let timestamp = event.timestamp, let tempBasal = event.tempBasal,
@@ -603,7 +609,9 @@ final class BasePumpHistoryStorage: PumpHistoryStorage, Injectable {
                             type: .tempBasal,
                             timestamp: timestamp,
                             amount: tempBasalRate as Decimal,
-                            duration: Int(tempBasal.duration)
+                            duration: Int(tempBasal.duration),
+                            deliveredUnits: tempBasal.deliveredUnits as Decimal?,
+                            insulinType: event.insulinType
                         )
                     } else {
                         return nil
@@ -622,25 +630,6 @@ extension BasePumpHistoryStorage {
     struct TimestampAndType: Hashable {
         let timestamp: Date
         let type: String
-    }
-}
-
-extension InsulinType {
-    /// Stable string identity for persistence; raw Int values must not be stored.
-    var identifier: String {
-        switch self {
-        case .novolog: return "novolog"
-        case .humalog: return "humalog"
-        case .apidra: return "apidra"
-        case .fiasp: return "fiasp"
-        case .lyumjev: return "lyumjev"
-        case .afrezza: return "afrezza"
-        }
-    }
-
-    init?(identifier: String) {
-        guard let match = InsulinType.allCases.first(where: { $0.identifier == identifier }) else { return nil }
-        self = match
     }
 }
 

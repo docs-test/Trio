@@ -1,5 +1,4 @@
 import Foundation
-import LoopKit
 
 struct IobTotal: Codable {
     let iob: Decimal
@@ -18,22 +17,24 @@ enum IobCalculation {
     }
 
     /// Effective insulinPeakTime in minutes, taking into account `useCustomPeakTime`.
-    /// Defaults come from LoopKit's exponential presets, custom values are clamped
-    /// to oref0's bounds. Bilinear has no exponential peak and yields nil.
+    /// Bilinear has no exponential peak and yields nil.
+    /// - Note: defaults mirror LoopKit's `ExponentialInsulinModelPreset` (rapidActingAdult,
+    /// fiasp) and custom bounds come from oref0. Literals because the algorithm package
+    /// compiles this file without LoopKit; `testDefaultPeaksMatchLoopKit` pins them.
     static func lookupPeak(curve: InsulinCurve, useCustomPeakTime: Bool, insulinPeakTime: Decimal) -> Double? {
-        let model: ExponentialInsulinModelPreset
+        let defaultPeak: Double
         let customBounds: ClosedRange<Double>
         switch curve {
         case .rapidActing:
-            model = .rapidActingAdult
+            defaultPeak = 75
             customBounds = 50 ... 120
         case .ultraRapid:
-            model = .fiasp
+            defaultPeak = 55
             customBounds = 35 ... 100
         case .bilinear:
             return nil
         }
-        guard useCustomPeakTime else { return model.peakActivity / 60 }
+        guard useCustomPeakTime else { return defaultPeak }
         return Double(insulinPeakTime).clamp(lowerBound: customBounds.lowerBound, upperBound: customBounds.upperBound)
     }
 

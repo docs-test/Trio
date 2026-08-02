@@ -230,6 +230,62 @@ import Testing
         #expect(row?.peakTime as? Decimal == 75, "Default rapid-acting peak is 75 min")
     }
 
+    /// `IobCalculation` can't import LoopKit (the algorithm package compiles it
+    /// without it), so its default peaks are literals. Pin them to the presets
+    /// they mirror; this fails if LoopKit ever changes them.
+    @Test("Default peaks match LoopKit's exponential presets") func testDefaultPeaksMatchLoopKit() throws {
+        let rapidActing = IobCalculation.lookupPeak(curve: .rapidActing, useCustomPeakTime: false, insulinPeakTime: 0)
+        let ultraRapid = IobCalculation.lookupPeak(curve: .ultraRapid, useCustomPeakTime: false, insulinPeakTime: 0)
+
+        #expect(rapidActing == ExponentialInsulinModelPreset.rapidActingAdult.peakActivity / 60)
+        #expect(ultraRapid == ExponentialInsulinModelPreset.fiasp.peakActivity / 60)
+    }
+
+    // MARK: - Remote payloads
+
+    @Test("Health and Tidepool payloads carry the dose's own insulin data") func testUploadPayloadsCarryDoseData() async throws {
+        let date = Date().addingTimeInterval(-30.minutes.timeInterval)
+        try await storage.storePumpEvents(
+            [
+                bolusEvent(date: date, units: 5.0, deliveredUnits: 2.4, syncIdentifier: "bolus-payload", isMutable: false),
+                tempBasalEvent(
+                    start: date,
+                    end: date.addingTimeInterval(30.minutes.timeInterval),
+                    rate: 1.0,
+                    deliveredUnits: 0.35,
+                    syncIdentifier: "tbr-payload",
+                    isMutable: false
+                )
+            ],
+            replacePendingEvents: false
+        )
+
+        let health = try await storage.getPumpHistoryNotYetUploadedToHealth()
+        let tidepool = try await storage.getPumpHistoryNotYetUploadedToTidepool()
+
+        for payload in [health, tidepool] {
+            let bolus = payload.first { $0.type == .bolus }
+            let tempBasal = payload.first { $0.type == .tempBasal }
+            #expect(bolus?.insulinType == LoopKit.InsulinType.lyumjev.identifier, "Dose insulin type must reach the uploader")
+            #expect(tempBasal?.deliveredUnits == 0.35, "Pump-reported delivery must reach the uploader")
+        }
+        // programmed vs delivered is a Tidepool-only distinction today;
+        // Double->Decimal rounding leaves binary noise, so compare with tolerance
+        let tidepoolBolus = tidepool.first { $0.type == .bolus }
+        #expect(abs((tidepoolBolus?.amount ?? 0) - 2.4) < 0.0001, "Delivered units")
+        #expect(abs((tidepoolBolus?.programmedAmount ?? 0) - 5.0) < 0.0001, "Programmed units")
+    }
+
+    @Test("External doses expose no insulin type to uploaders") func testExternalDoseHasNoInsulinType() async throws {
+        await storage.storeExternalInsulinEvent(amount: 2.0, timestamp: Date().addingTimeInterval(-10.minutes.timeInterval))
+
+        let tidepool = try await storage.getPumpHistoryNotYetUploadedToTidepool()
+        let health = try await storage.getPumpHistoryNotYetUploadedToHealth()
+        #expect(tidepool.first?.insulinType == nil, "External insulin is not the pump's insulin")
+        #expect(tidepool.first?.isExternal == true)
+        #expect(health.first?.isExternal == true, "Health needs this to suppress the pump-type fallback")
+    }
+
     @Test("Finalized rows are frozen against later reports") func testFinalizedRowIsFrozen() async throws {
         let date = Date().addingTimeInterval(-10.minutes.timeInterval)
 
@@ -477,6 +533,114 @@ import Testing
 
         // 2 U/hr for the 30 elapsed minutes, not the scheduled 60
         #expect(abs(Double(truncating: insulin as NSNumber) - 1.0) < 0.001)
+    }
+
+    // MARK: - Suspension pairing
+
+    private func suspendEvent(_ date: Date) -> PumpHistoryEvent {
+        PumpHistoryEvent(id: UUID().uuidString, type: .pumpSuspend, timestamp: date)
+    }
+
+    private func resumeEvent(_ date: Date) -> PumpHistoryEvent {
+        PumpHistoryEvent(id: UUID().uuidString, type: .pumpResume, timestamp: date)
+    }
+
+    @Test("An unresumed suspension still pairs the earlier one") func testUnbalancedSuspensionPairing() throws {
+        // pump history arrives newest-first: S1 R1 S2, still suspended
+        let now = Date()
+        let s1 = now.addingTimeInterval(-3.hours.timeInterval)
+        let r1 = now.addingTimeInterval(-2.hours.timeInterval)
+        let s2 = now.addingTimeInterval(-1.hours.timeInterval)
+
+        let spans = BaseTDDStorage.suspensionSpans(
+            suspends: [suspendEvent(s2), suspendEvent(s1)],
+            resumes: [resumeEvent(r1)],
+            now: now
+        )
+
+        #expect(spans.count == 2, "Both the closed and the open suspension must be represented")
+        #expect(spans.first?.start == s1 && spans.first?.end == r1, "S1 must pair with R1, not be dropped")
+        #expect(spans.last?.start == s2 && spans.last?.end == now, "An unresumed suspension runs to now")
+    }
+
+    @Test("Balanced suspensions pair chronologically") func testBalancedSuspensionPairing() throws {
+        let now = Date()
+        let s1 = now.addingTimeInterval(-4.hours.timeInterval)
+        let r1 = now.addingTimeInterval(-3.hours.timeInterval)
+        let s2 = now.addingTimeInterval(-2.hours.timeInterval)
+        let r2 = now.addingTimeInterval(-1.hours.timeInterval)
+
+        let spans = BaseTDDStorage.suspensionSpans(
+            suspends: [suspendEvent(s2), suspendEvent(s1)],
+            resumes: [resumeEvent(r2), resumeEvent(r1)],
+            now: now
+        )
+
+        #expect(spans.count == 2)
+        #expect(spans.first?.end == r1 && spans.last?.end == r2, "Each suspend pairs with the resume that ends it")
+    }
+
+    @Test("A leading resume without its suspend is ignored") func testLeadingResumeIgnored() throws {
+        let now = Date()
+        let r0 = now.addingTimeInterval(-3.hours.timeInterval)
+        let s1 = now.addingTimeInterval(-2.hours.timeInterval)
+        let r1 = now.addingTimeInterval(-1.hours.timeInterval)
+
+        let spans = BaseTDDStorage.suspensionSpans(
+            suspends: [suspendEvent(s1)],
+            resumes: [resumeEvent(r1), resumeEvent(r0)],
+            now: now
+        )
+
+        #expect(spans.count == 1)
+        #expect(spans.first?.start == s1 && spans.first?.end == r1)
+    }
+
+    @Test("A suspension inside a running temp basal is not counted as delivered") func testSuspensionReducesTempBasalInsulin(
+    ) throws {
+        let tddStorage = resolver.resolve(TDDStorage.self) as! BaseTDDStorage
+        let now = Date()
+        let start = now.addingTimeInterval(-4.hours.timeInterval)
+        // 1 U/hr for 4 h, suspended for the middle hour
+        let tempBasal = PumpHistoryEvent(id: "tbr", type: .tempBasal, timestamp: start, amount: 1.0, duration: 240)
+        let spans = BaseTDDStorage.suspensionSpans(
+            suspends: [suspendEvent(start.addingTimeInterval(1.hours.timeInterval))],
+            resumes: [resumeEvent(start.addingTimeInterval(2.hours.timeInterval))],
+            now: now
+        )
+
+        let insulin = tddStorage.calculateTempBasalInsulin(
+            [tempBasal],
+            suspensions: spans,
+            now: now,
+            roundToSupportedBasalRate: { $0 }
+        )
+
+        #expect(abs(Double(truncating: insulin as NSNumber) - 3.0) < 0.001, "Only the three unsuspended hours deliver")
+    }
+
+    @Test("A running temp basal is clamped to now and to its successor") func testTempBasalClampedToNowAndSuccessor() throws {
+        let tddStorage = resolver.resolve(TDDStorage.self) as! BaseTDDStorage
+        let now = Date()
+        let first = now.addingTimeInterval(-2.hours.timeInterval)
+        // 2 U/hr scheduled for 2 h but replaced after 1 h, then 1 U/hr still running with 1 h elapsed
+        let superseded = PumpHistoryEvent(id: "tbr1", type: .tempBasal, timestamp: first, amount: 2.0, duration: 120)
+        let running = PumpHistoryEvent(
+            id: "tbr2",
+            type: .tempBasal,
+            timestamp: now.addingTimeInterval(-1.hours.timeInterval),
+            amount: 1.0,
+            duration: 120
+        )
+
+        let insulin = tddStorage.calculateTempBasalInsulin(
+            [superseded, running],
+            suspensions: [],
+            now: now,
+            roundToSupportedBasalRate: { $0 }
+        )
+
+        #expect(abs(Double(truncating: insulin as NSNumber) - 3.0) < 0.001, "2 U for the first hour, 1 U so far for the second")
     }
 
     // MARK: - NS upload race (values changed while a POST was in flight)
